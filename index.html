@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Attendance Scanner</title>
+    <!-- Tailwind CSS for a clean, mobile-first design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- jsQR library for QR code scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+    <!-- Custom CSS styles -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+        }
+        .container {
+            max-width: 600px;
+            padding: 1.5rem;
+            margin: auto;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .button-active {
+            background-color: #3b82f6;
+            color: white;
+            border-radius: 0.5rem;
+        }
+        .rounded-card {
+            background-color: white;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .scanner-container {
+            position: relative;
+            width: 100%;
+            height: 300px;
+            background-color: black;
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #canvas {
+            display: none;
+        }
+        #loading-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.25rem;
+        }
+    </style>
+
+    <!-- PWA Manifest Data -->
+    <script id="manifest-data" type="application/json">
+        {
+            "name": "QR Code Scanner",
+            "short_name": "QR Scanner",
+            "description": "An offline QR code attendance scanner.",
+            "start_url": "./index.html",
+            "display": "standalone",
+            "background_color": "#f0f4f8",
+            "theme_color": "#3b82f6",
+            "icons": [
+                {
+                    "src": "https://placehold.co/192x192/3b82f6/FFFFFF?text=QR",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                },
+                {
+                    "src": "https://placehold.co/512x512/3b82f6/FFFFFF?text=QR",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }
+            ]
+        }
+    </script>
+</head>
+<body class="p-4">
+    <div class="container bg-gray-100 min-h-screen">
+        <h1 class="text-3xl font-bold text-center text-blue-800 my-4">QR Attendance</h1>
+        <p id="app-id-display" class="text-xs text-center text-gray-500 mb-4"></p>
+        
+        <!-- Tab Navigation -->
+        <div class="flex space-x-2 p-2 bg-gray-200 rounded-full mb-4">
+            <button id="scan-tab-btn" class="flex-1 py-2 px-4 text-center text-gray-700 font-semibold rounded-full transition-all duration-300 button-active">Scan</button>
+            <button id="log-tab-btn" class="flex-1 py-2 px-4 text-center text-gray-700 font-semibold rounded-full transition-all duration-300">Log</button>
+        </div>
+
+        <!-- Scan Tab Content -->
+        <div id="scan-tab" class="tab-content active">
+            <div class="rounded-card text-center">
+                <p id="date-display" class="text-sm font-medium text-blue-500"></p>
+                <p id="time-display" class="text-4xl font-extrabold text-blue-900 mt-2"></p>
+                
+                <div class="scanner-container mt-4 mb-4">
+                    <video id="video"></video>
+                    <div id="loading-message">Loading camera...</div>
+                    <canvas id="canvas"></canvas>
+                </div>
+
+                <div id="status-box" class="p-4 rounded-lg text-sm transition-all duration-500 mb-4">
+                    <p id="status-message" class="font-semibold"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log Tab Content -->
+        <div id="log-tab" class="tab-content">
+            <div class="rounded-card">
+                <h2 class="text-2xl font-bold mb-4 text-blue-700">Attendance Log</h2>
+                <div id="log-list" class="space-y-4">
+                    <!-- Log entries will be added here by JavaScript -->
+                </div>
+                <div class="flex gap-2">
+                    <button id="reset-button" class="w-1/2 mt-6 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-full transition-all duration-300">
+                        Clear Log
+                    </button>
+                    <button id="generate-report-button" class="w-1/2 mt-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-full transition-all duration-300">
+                        Generate Report ✨
+                    </button>
+                </div>
+                
+                <div id="report-container" class="mt-6">
+                    <h3 class="text-lg font-bold text-blue-700 mb-2 hidden" id="report-title">Attendance Report</h3>
+                    <div id="report-content" class="p-4 bg-gray-50 rounded-lg text-sm whitespace-pre-wrap"></div>
+                    <button id="copy-report-button" class="w-full mt-4 py-2 bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold rounded-full hidden">Copy Report</button>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirmation Modal -->
+    <div id="confirmation-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3 text-center">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Are you sure?</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p class="text-sm text-gray-500">Do you really want to clear the entire attendance log? This action cannot be undone.</p>
+                </div>
+                <div class="items-center px-4 py-3">
+                    <button id="confirm-yes" class="px-4 py-2 bg-red-500 text-white text-base font-medium rounded-md w-1/2 shadow-sm hover:bg-red-600 focus:outline-none mr-2">
+                        Yes, Clear
+                    </button>
+                    <button id="confirm-no" class="px-4 py-2 bg-gray-300 text-gray-800 text-base font-medium rounded-md w-1/2 shadow-sm hover:bg-gray-400 focus:outline-none">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Service Worker Script -->
+    <script id="service-worker-script" type="text/plain">
+        const CACHE_NAME = 'qr-scanner-v1';
+        const urlsToCache = [
+            './index.html',
+            'https://cdn.tailwindcss.com',
+            'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+            'https://placehold.co/192x192/3b82f6/FFFFFF?text=QR',
+            'https://placehold.co/512x512/3b82f6/FFFFFF?text=QR'
+        ];
+
+        // This event is fired when the service worker is first installed.
+        self.addEventListener('install', (event) => {
+            event.waitUntil(
+                caches.open(CACHE_NAME)
+                    .then((cache) => {
+                        console.log('Opened cache');
+                        return cache.addAll(urlsToCache);
+                    })
+            );
+        });
+
+        // This event is fired every time the app requests a resource.
+        self.addEventListener('fetch', (event) => {
+            event.respondWith(
+                caches.match(event.request)
+                    .then((response) => {
+                        // If the resource is in the cache, return it.
+                        if (response) {
+                            return response;
+                        }
+                        // If not, fetch it from the network.
+                        return fetch(event.request);
+                    })
+            );
+        });
+
+        // This event is fired when the service worker is updated.
+        self.addEventListener('activate', (event) => {
+            const cacheWhitelist = [CACHE_NAME];
+            event.waitUntil(
+                caches.keys().then((cacheNames) => {
+                    return Promise.all(
+                        cacheNames.map((cacheName) => {
+                            if (cacheWhitelist.indexOf(cacheName) === -1) {
+                                return caches.delete(cacheName);
+                            }
+                        })
+                    );
+                })
+            );
+        });
+    </script>
+
+    <!-- Main Application Script -->
+    <script>
+        // This is a placeholder for the actual app ID.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        document.getElementById('app-id-display').textContent = `App ID: ${appId}`;
+
+        // Get elements from the page
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+        const loadingMessage = document.getElementById('loading-message');
+        const statusBox = document.getElementById('status-box');
+        const statusMessage = document.getElementById('status-message');
+        const dateDisplay = document.getElementById('date-display');
+        const timeDisplay = document.getElementById('time-display');
+        const logList = document.getElementById('log-list');
+        const resetButton = document.getElementById('reset-button');
+        const scanTabBtn = document.getElementById('scan-tab-btn');
+        const logTabBtn = document.getElementById('log-tab-btn');
+        const scanTab = document.getElementById('scan-tab');
+        const logTab = document.getElementById('log-tab');
+        const generateReportButton = document.getElementById('generate-report-button');
+        const reportContent = document.getElementById('report-content');
+        const reportTitle = document.getElementById('report-title');
+        const copyReportButton = document.getElementById('copy-report-button');
+        const confirmationModal = document.getElementById('confirmation-modal');
+        const confirmYesBtn = document.getElementById('confirm-yes');
+        const confirmNoBtn = document.getElementById('confirm-no');
+
+
+        // Define the class start time in Philippine time (12:00 PM)
+        const CLASS_START_HOUR = 12;
+        const CLASS_START_MINUTE = 0;
+        const LATE_THRESHOLD_MINUTES = 5;
+
+        // An object to track if a student has been scanned today
+        let scannedToday = {};
+
+        // ----------------- TAB SWITCHING LOGIC -----------------
+        scanTabBtn.addEventListener('click', () => {
+            scanTab.classList.add('active');
+            logTab.classList.remove('active');
+            scanTabBtn.classList.add('button-active');
+            logTabBtn.classList.remove('button-active');
+            startCamera(); // Start camera when switching back to scan tab
+        });
+
+        logTabBtn.addEventListener('click', () => {
+            logTab.classList.add('active');
+            scanTab.classList.remove('active');
+            logTabBtn.classList.add('button-active');
+            scanTabBtn.classList.remove('button-active');
+            stopCamera(); // Stop camera when switching to log tab
+            displayLog();
+        });
+
+        // ----------------- DATE & TIME LOGIC -----------------
+        function updateDateTime() {
+            const now = new Date();
+            const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+            dateDisplay.textContent = now.toLocaleDateString('en-US', dateOptions);
+            timeDisplay.textContent = now.toLocaleTimeString('en-US', timeOptions);
+        }
+        setInterval(updateDateTime, 1000);
+        updateDateTime(); // Initial call
+
+        // ----------------- QR SCANNER LOGIC -----------------
+        // This function will start the camera and begin scanning for QR codes
+        function startCamera() {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(function(stream) {
+                video.srcObject = stream;
+                video.setAttribute("playsinline", true); // Required for iPhone
+                video.play();
+                requestAnimationFrame(tick);
+                loadingMessage.style.display = 'none';
+            }).catch(function(err) {
+                loadingMessage.textContent = 'Could not access camera.';
+                console.error("Camera access denied or failed: ", err);
+            });
+        }
+
+        // This function will stop the camera
+        function stopCamera() {
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        // The main scanning loop
+        function tick() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert",
+                });
+
+                if (code) {
+                    processQRCode(code.data);
+                }
+            }
+            if (scanTab.classList.contains('active')) {
+                requestAnimationFrame(tick);
+            }
+        }
+
+        // This is where the magic happens! We'll handle the QR code data here.
+        function processQRCode(data) {
+            console.log("QR Code detected:", data);
+
+            // The data is expected to be a single string.
+            // Let's split it by commas to get the fields.
+            const parts = data.split(',');
+            if (parts.length !== 3) {
+                showMessage('Invalid QR code format. Please check the data.', 'error');
+                return;
+            }
+
+            const studentName = parts[0].trim();
+            const studentId = parts[1].trim();
+            const studentCourse = parts[2].trim();
+
+            const now = new Date();
+            const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
+
+            // Check if student has already been scanned today
+            if (isStudentScannedToday(studentId, today)) {
+                showMessage('This student has already been scanned today.', 'warning');
+                return;
+            }
+
+            // Check if the student is late
+            let status = 'Present';
+            // Create a date object for the class start time today
+            const classStartTime = new Date(now);
+            classStartTime.setHours(CLASS_START_HOUR, CLASS_START_MINUTE, 0, 0);
+
+            // Create a date object for the late threshold time today
+            const lateTime = new Date(classStartTime);
+            lateTime.setMinutes(lateTime.getMinutes() + LATE_THRESHOLD_MINUTES);
+
+            // Compare the scan time with the late threshold time
+            if (now > lateTime) {
+                status = 'Late';
+            }
+
+            // Create the attendance record
+            const newRecord = {
+                name: studentName,
+                id: studentId,
+                course: studentCourse,
+                time: now.toLocaleTimeString(),
+                date: now.toLocaleDateString(),
+                status: status
+            };
+
+            // Save the record to localStorage
+            saveRecord(newRecord);
+
+            // Show success message
+            showMessage(`Success! ${studentName} (${studentId}) is marked as ${status}.`, 'success');
+
+            // Add the student to the "scanned today" list
+            scannedToday[studentId] = today;
+        }
+
+        // ----------------- LOCAL STORAGE LOGIC -----------------
+        function getAttendanceLog() {
+            const log = localStorage.getItem('attendanceLog');
+            return log ? JSON.parse(log) : [];
+        }
+
+        function saveRecord(record) {
+            const log = getAttendanceLog();
+            log.push(record);
+            localStorage.setItem('attendanceLog', JSON.stringify(log));
+            displayLog(); // Refresh the log display
+        }
+
+        function isStudentScannedToday(studentId, todayDate) {
+            const log = getAttendanceLog();
+            return log.some(record => record.id === studentId && record.date === new Date().toLocaleDateString());
+        }
+
+        function displayLog() {
+            const log = getAttendanceLog();
+            logList.innerHTML = ''; // Clear previous log
+            if (log.length === 0) {
+                logList.innerHTML = '<p class="text-center text-gray-500 italic">No attendance records yet.</p>';
+            } else {
+                log.forEach(record => {
+                    const statusColor = record.status === 'Present' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
+                    const recordHtml = `
+                        <div class="p-4 rounded-lg border-2 border-gray-200">
+                            <p class="font-bold text-gray-800">${record.name}</p>
+                            <p class="text-sm text-gray-600">ID: ${record.id}</p>
+                            <p class="text-sm text-gray-600">Course: ${record.course}</p>
+                            <p class="text-sm text-gray-600">Time: ${record.time}</p>
+                            <p class="text-sm text-gray-600">Date: ${record.date}</p>
+                            <span class="inline-block mt-2 text-xs font-semibold px-2 py-1 rounded-full ${statusColor}">${record.status}</span>
+                        </div>
+                    `;
+                    logList.innerHTML += recordHtml;
+                });
+            }
+        }
+
+        // Custom modal logic instead of window.confirm
+        resetButton.addEventListener('click', () => {
+            confirmationModal.classList.remove('hidden');
+        });
+
+        confirmYesBtn.addEventListener('click', () => {
+            localStorage.removeItem('attendanceLog');
+            displayLog();
+            showMessage('Attendance log has been cleared.', 'info');
+            reportContent.textContent = '';
+            reportTitle.classList.add('hidden');
+            copyReportButton.classList.add('hidden');
+            confirmationModal.classList.add('hidden');
+        });
+
+        confirmNoBtn.addEventListener('click', () => {
+            confirmationModal.classList.add('hidden');
+        });
+
+        // ----------------- GEMINI API INTEGRATION -----------------
+        generateReportButton.addEventListener('click', generateAttendanceReport);
+        copyReportButton.addEventListener('click', copyReport);
+
+        async function generateAttendanceReport() {
+            const log = getAttendanceLog();
+            if (log.length === 0) {
+                reportContent.textContent = "No attendance records to generate a report.";
+                reportTitle.classList.remove('hidden');
+                copyReportButton.classList.add('hidden');
+                return;
+            }
+
+            reportContent.textContent = "Generating report...";
+            reportTitle.classList.remove('hidden');
+            copyReportButton.classList.add('hidden');
+            generateReportButton.disabled = true;
+
+            try {
+                const prompt = `Based on the following attendance data, generate a concise and formal attendance report. The report should include:
+1.  The total number of students scanned.
+2.  The number of students marked "Present".
+3.  The number of students marked "Late".
+4.  A list of each student's name, their course, and their attendance status for today.
+5.  A clear, professional tone suitable for an academic setting.
+
+Attendance Data (JSON):
+${JSON.stringify(log, null, 2)}
+`;
+                const apiKey = "";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                const generatedText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (generatedText) {
+                    reportContent.textContent = generatedText;
+                    copyReportButton.classList.remove('hidden');
+                } else {
+                    reportContent.textContent = "Failed to generate report. Please try again.";
+                }
+
+            } catch (error) {
+                console.error('Error generating report:', error);
+                reportContent.textContent = "An error occurred while generating the report. Please check the console for details.";
+            } finally {
+                generateReportButton.disabled = false;
+            }
+        }
+
+        function copyReport() {
+            const textToCopy = reportContent.textContent;
+            try {
+                // Use document.execCommand for better compatibility in iframes
+                const tempTextArea = document.createElement('textarea');
+                tempTextArea.value = textToCopy;
+                document.body.appendChild(tempTextArea);
+                tempTextArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempTextArea);
+                showMessage("Report copied to clipboard!", "success");
+            } catch (err) {
+                console.error('Failed to copy text:', err);
+                showMessage("Failed to copy report.", "error");
+            }
+        }
+
+
+        // ----------------- UI UTILITY FUNCTIONS -----------------
+        function showMessage(message, type) {
+            statusMessage.textContent = message;
+            statusBox.className = 'p-4 rounded-lg text-sm transition-all duration-500 mb-4';
+            if (type === 'success') {
+                statusBox.classList.add('bg-green-100', 'text-green-800');
+            } else if (type === 'warning') {
+                statusBox.classList.add('bg-yellow-100', 'text-yellow-800');
+            } else if (type === 'error') {
+                statusBox.classList.add('bg-red-100', 'text-red-800');
+            } else if (type === 'info') {
+                    statusBox.classList.add('bg-blue-100', 'text-blue-800');
+            }
+        }
+
+        // PWA Registration Logic
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swScript = document.getElementById('service-worker-script').textContent;
+                const swBlob = new Blob([swScript], { type: 'text/javascript' });
+                const swUrl = URL.createObjectURL(swBlob);
+
+                navigator.serviceWorker.register(swUrl).then(registration => {
+                    console.log('Service Worker registered with scope:', registration.scope);
+                }).catch(error => {
+                    console.log('Service Worker registration failed:', error);
+                });
+            });
+        }
+
+        // Initialize the app
+        document.addEventListener('DOMContentLoaded', () => {
+            startCamera();
+            displayLog();
+        });
+    </script>
+</body>
+</html>
