@@ -4,11 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QR Code Attendance Scanner</title>
+    
     <!-- Tailwind CSS for a clean, mobile-first design -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- jsQR library for QR code scanning -->
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
+    <!-- PWA Manifest Data for a modern web app experience -->
+    <!-- The data is included inline and registered via JavaScript -->
+    <script id="manifest-data" type="application/json">
+        {
+            "name": "QR Code Scanner",
+            "short_name": "QR Scanner",
+            "description": "An offline QR code attendance scanner.",
+            "start_url": "./index.html",
+            "display": "standalone",
+            "background_color": "#f0f4f8",
+            "theme_color": "#3b82f6",
+            "icons": [
+                {
+                    "src": "https://placehold.co/192x192/3b82f6/FFFFFF?text=QR",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                },
+                {
+                    "src": "https://placehold.co/512x512/3b82f6/FFFFFF?text=QR",
+                    "sizes": "512x512",
+                    "type": "image/png"
+                }
+            ]
+        }
+    </script>
+    
     <!-- Custom CSS styles -->
     <style>
         body {
@@ -63,36 +90,12 @@
             font-size: 1.25rem;
         }
     </style>
-
-    <!-- PWA Manifest Data -->
-    <script id="manifest-data" type="application/json">
-        {
-            "name": "QR Code Scanner",
-            "short_name": "QR Scanner",
-            "description": "An offline QR code attendance scanner.",
-            "start_url": "./index.html",
-            "display": "standalone",
-            "background_color": "#f0f4f8",
-            "theme_color": "#3b82f6",
-            "icons": [
-                {
-                    "src": "https://placehold.co/192x192/3b82f6/FFFFFF?text=QR",
-                    "sizes": "192x192",
-                    "type": "image/png"
-                },
-                {
-                    "src": "https://placehold.co/512x512/3b82f6/FFFFFF?text=QR",
-                    "sizes": "512x512",
-                    "type": "image/png"
-                }
-            ]
-        }
-    </script>
 </head>
 <body class="p-4">
     <div class="container bg-gray-100 min-h-screen">
         <h1 class="text-3xl font-bold text-center text-blue-800 my-4">QR Attendance</h1>
-        <p id="app-id-display" class="text-xs text-center text-gray-500 mb-4"></p>
+        <p id="app-id-display" class="text-xs text-center text-gray-500 mb-2"></p>
+        <p id="user-id-display" class="text-xs text-center text-gray-500 mb-4"></p>
         
         <!-- Tab Navigation -->
         <div class="flex space-x-2 p-2 bg-gray-200 rounded-full mb-4">
@@ -163,9 +166,10 @@
             </div>
         </div>
     </div>
-    
+
     <!-- Service Worker Script -->
-    <script id="service-worker-script" type="text/plain">
+    <!-- The script is included inline and registered via JavaScript -->
+    <script id="service-worker-script">
         const CACHE_NAME = 'qr-scanner-v1';
         const urlsToCache = [
             './index.html',
@@ -217,9 +221,21 @@
             );
         });
     </script>
-
+    
     <!-- Main Application Script -->
-    <script>
+    <script type="module">
+        // Firebase imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, getDocs, deleteDoc, query, onSnapshot, orderBy, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // IMPORTANT: Set Firestore logging for debugging
+        setLogLevel('debug');
+
+        // Firestore and Auth initialization variables
+        let app, db, auth, userId;
+        
         // This is a placeholder for the actual app ID.
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         document.getElementById('app-id-display').textContent = `App ID: ${appId}`;
@@ -246,15 +262,111 @@
         const confirmationModal = document.getElementById('confirmation-modal');
         const confirmYesBtn = document.getElementById('confirm-yes');
         const confirmNoBtn = document.getElementById('confirm-no');
-
+        const userIdDisplay = document.getElementById('user-id-display');
 
         // Define the class start time in Philippine time (12:00 PM)
         const CLASS_START_HOUR = 12;
         const CLASS_START_MINUTE = 0;
         const LATE_THRESHOLD_MINUTES = 5;
 
-        // An object to track if a student has been scanned today
-        let scannedToday = {};
+        // ----------------- FIREBASE INITIALIZATION AND AUTHENTICATION -----------------
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // Listen for auth state changes and sign in the user
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userIdDisplay.textContent = `User ID: ${userId}`;
+                    console.log('User signed in with UID:', userId);
+                    // Start real-time listener for the attendance log
+                    listenForAttendanceLog();
+                } else {
+                    console.log('No user signed in. Attempting sign-in...');
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error('Failed to sign in:', error);
+                    }
+                }
+            });
+        } else {
+            console.error('Firebase config is missing.');
+        }
+
+        // ----------------- FIRESTORE DATA HANDLING -----------------
+        async function saveRecord(record) {
+            if (!db || !userId) {
+                console.error("Firestore not initialized or user not authenticated.");
+                return;
+            }
+            try {
+                // Save the record in the public collection under the app's ID
+                const attendanceRef = collection(db, `artifacts/${appId}/public/data/attendanceLog`);
+                await addDoc(attendanceRef, record);
+                console.log("Record saved successfully!");
+            } catch (e) {
+                console.error("Error adding document: ", e);
+            }
+        }
+
+        async function listenForAttendanceLog() {
+            if (!db) return;
+            // Use onSnapshot for real-time updates
+            const q = collection(db, `artifacts/${appId}/public/data/attendanceLog`);
+            onSnapshot(q, (querySnapshot) => {
+                const log = [];
+                querySnapshot.forEach((doc) => {
+                    log.push({ id: doc.id, ...doc.data() });
+                });
+                displayLog(log);
+            }, (error) => {
+                console.error("Error listening to attendance log:", error);
+            });
+        }
+
+        async function isStudentScannedToday(studentId) {
+            if (!db || !userId) return false;
+            const today = new Date().toISOString().split('T')[0];
+            const q = query(
+                collection(db, `artifacts/${appId}/public/data/attendanceLog`),
+                where("id", "==", studentId),
+                where("date", "==", today)
+            );
+            const querySnapshot = await getDocs(q);
+            return !querySnapshot.empty;
+        }
+
+        function displayLog(log) {
+            logList.innerHTML = '';
+            if (log.length === 0) {
+                logList.innerHTML = '<p class="text-center text-gray-500 italic">No attendance records yet.</p>';
+            } else {
+                log.forEach(record => {
+                    const statusColor = record.status === 'Present' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
+                    const recordHtml = `
+                        <div class="p-4 rounded-lg border-2 border-gray-200">
+                            <p class="font-bold text-gray-800">${record.name}</p>
+                            <p class="text-sm text-gray-600">ID: ${record.id}</p>
+                            <p class="text-sm text-gray-600">Course: ${record.course}</p>
+                            <p class="text-sm text-gray-600">Time: ${record.time}</p>
+                            <p class="text-sm text-gray-600">Date: ${record.date}</p>
+                            <span class="inline-block mt-2 text-xs font-semibold px-2 py-1 rounded-full ${statusColor}">${record.status}</span>
+                        </div>
+                    `;
+                    logList.innerHTML += recordHtml;
+                });
+            }
+        }
 
         // ----------------- TAB SWITCHING LOGIC -----------------
         scanTabBtn.addEventListener('click', () => {
@@ -271,7 +383,6 @@
             logTabBtn.classList.add('button-active');
             scanTabBtn.classList.remove('button-active');
             stopCamera(); // Stop camera when switching to log tab
-            displayLog();
         });
 
         // ----------------- DATE & TIME LOGIC -----------------
@@ -329,7 +440,7 @@
         }
 
         // This is where the magic happens! We'll handle the QR code data here.
-        function processQRCode(data) {
+        async function processQRCode(data) {
             console.log("QR Code detected:", data);
 
             // The data is expected to be a single string.
@@ -346,13 +457,15 @@
 
             const now = new Date();
             const today = now.toISOString().split('T')[0]; // YYYY-MM-DD
+            const dateDisplayString = now.toLocaleDateString();
 
             // Check if student has already been scanned today
-            if (isStudentScannedToday(studentId, today)) {
+            const alreadyScanned = await isStudentScannedToday(studentId);
+            if (alreadyScanned) {
                 showMessage('This student has already been scanned today.', 'warning');
                 return;
             }
-
+            
             // Check if the student is late
             let status = 'Present';
             // Create a date object for the class start time today
@@ -374,59 +487,16 @@
                 id: studentId,
                 course: studentCourse,
                 time: now.toLocaleTimeString(),
-                date: now.toLocaleDateString(),
-                status: status
+                date: dateDisplayString,
+                status: status,
+                timestamp: now.toISOString(),
             };
 
-            // Save the record to localStorage
+            // Save the record to Firestore
             saveRecord(newRecord);
 
             // Show success message
             showMessage(`Success! ${studentName} (${studentId}) is marked as ${status}.`, 'success');
-
-            // Add the student to the "scanned today" list
-            scannedToday[studentId] = today;
-        }
-
-        // ----------------- LOCAL STORAGE LOGIC -----------------
-        function getAttendanceLog() {
-            const log = localStorage.getItem('attendanceLog');
-            return log ? JSON.parse(log) : [];
-        }
-
-        function saveRecord(record) {
-            const log = getAttendanceLog();
-            log.push(record);
-            localStorage.setItem('attendanceLog', JSON.stringify(log));
-            displayLog(); // Refresh the log display
-        }
-
-        function isStudentScannedToday(studentId, todayDate) {
-            const log = getAttendanceLog();
-            return log.some(record => record.id === studentId && record.date === new Date().toLocaleDateString());
-        }
-
-        function displayLog() {
-            const log = getAttendanceLog();
-            logList.innerHTML = ''; // Clear previous log
-            if (log.length === 0) {
-                logList.innerHTML = '<p class="text-center text-gray-500 italic">No attendance records yet.</p>';
-            } else {
-                log.forEach(record => {
-                    const statusColor = record.status === 'Present' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
-                    const recordHtml = `
-                        <div class="p-4 rounded-lg border-2 border-gray-200">
-                            <p class="font-bold text-gray-800">${record.name}</p>
-                            <p class="text-sm text-gray-600">ID: ${record.id}</p>
-                            <p class="text-sm text-gray-600">Course: ${record.course}</p>
-                            <p class="text-sm text-gray-600">Time: ${record.time}</p>
-                            <p class="text-sm text-gray-600">Date: ${record.date}</p>
-                            <span class="inline-block mt-2 text-xs font-semibold px-2 py-1 rounded-full ${statusColor}">${record.status}</span>
-                        </div>
-                    `;
-                    logList.innerHTML += recordHtml;
-                });
-            }
         }
 
         // Custom modal logic instead of window.confirm
@@ -434,14 +504,30 @@
             confirmationModal.classList.remove('hidden');
         });
 
-        confirmYesBtn.addEventListener('click', () => {
-            localStorage.removeItem('attendanceLog');
-            displayLog();
-            showMessage('Attendance log has been cleared.', 'info');
-            reportContent.textContent = '';
-            reportTitle.classList.add('hidden');
-            copyReportButton.classList.add('hidden');
-            confirmationModal.classList.add('hidden');
+        confirmYesBtn.addEventListener('click', async () => {
+            if (!db || !userId) {
+                console.error("Firestore not initialized or user not authenticated.");
+                return;
+            }
+            try {
+                // Get all documents and delete them one by one
+                const q = collection(db, `artifacts/${appId}/public/data/attendanceLog`);
+                const querySnapshot = await getDocs(q);
+                const deletePromises = [];
+                querySnapshot.forEach((d) => {
+                    deletePromises.push(deleteDoc(doc(db, `artifacts/${appId}/public/data/attendanceLog`, d.id)));
+                });
+                await Promise.all(deletePromises);
+                showMessage('Attendance log has been cleared.', 'info');
+                reportContent.textContent = '';
+                reportTitle.classList.add('hidden');
+                copyReportButton.classList.add('hidden');
+            } catch (e) {
+                console.error("Error clearing log:", e);
+                showMessage("Failed to clear log.", "error");
+            } finally {
+                confirmationModal.classList.add('hidden');
+            }
         });
 
         confirmNoBtn.addEventListener('click', () => {
@@ -453,7 +539,17 @@
         copyReportButton.addEventListener('click', copyReport);
 
         async function generateAttendanceReport() {
-            const log = getAttendanceLog();
+            if (!db || !userId) {
+                reportContent.textContent = "Please wait for user authentication to complete.";
+                return;
+            }
+
+            // Fetch data from Firestore to ensure we have the latest records
+            const attendanceRef = collection(db, `artifacts/${appId}/public/data/attendanceLog`);
+            const querySnapshot = await getDocs(attendanceRef);
+            const log = [];
+            querySnapshot.forEach(d => log.push(d.data()));
+
             if (log.length === 0) {
                 reportContent.textContent = "No attendance records to generate a report.";
                 reportTitle.classList.remove('hidden');
@@ -551,8 +647,9 @@ ${JSON.stringify(log, null, 2)}
                 const swScript = document.getElementById('service-worker-script').textContent;
                 const swBlob = new Blob([swScript], { type: 'text/javascript' });
                 const swUrl = URL.createObjectURL(swBlob);
-
-                navigator.serviceWorker.register(swUrl).then(registration => {
+                
+                // IMPORTANT: The scope should be the root of the app
+                navigator.serviceWorker.register(swUrl, { scope: './' }).then(registration => {
                     console.log('Service Worker registered with scope:', registration.scope);
                 }).catch(error => {
                     console.log('Service Worker registration failed:', error);
@@ -563,7 +660,6 @@ ${JSON.stringify(log, null, 2)}
         // Initialize the app
         document.addEventListener('DOMContentLoaded', () => {
             startCamera();
-            displayLog();
         });
     </script>
 </body>
